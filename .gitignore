@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .md/
+Bot_Documentation.md
 
 # C extensions
 *.so

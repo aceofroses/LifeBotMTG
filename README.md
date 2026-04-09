@@ -18,7 +18,7 @@ When a game starts, the bot posts two things in the channel:
 - **Commander damage** — tracked per attacker separately, since 21 from a single commander is lethal
 - **Poison counters** — tracked 0 to 10, lethal at 10
 - **Commander tax** — increments by 2 each time a commander is recast, displayed as extra mana cost
-- **Deck info** — optionally linked via an Archidekt URL, shows deck name and commander on the board
+- **Deck info** — optionally linked via an Archidekt URL, shows deck name, commander, deck bracket, and deck cost(via TCGPlayer info) on the board
 
 ---
 

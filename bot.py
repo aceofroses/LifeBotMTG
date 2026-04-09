@@ -32,6 +32,8 @@ class PlayerState:
         self.commander_tax = 0          # extra mana cost (increments +2 per recast)
         self.deck_url = deck_url
         self.deck_name: Optional[str] = None
+        self.bracket: Optional[str] = None
+        self.deck_cost: Optional[str] = None
         self.commander_name: Optional[str] = None
         # commander_damage[attacker_id] = damage received from that player's commander
         self.commander_damage: dict[int, int] = {}
@@ -107,7 +109,7 @@ class GameSession:
 sessions: dict[int, GameSession] = {}
 
 
-# ─── Board Embed Builder ────────────────────────────────────────────────────────
+# Board Embed Builder 
 
 def build_board_embed(session: GameSession) -> discord.Embed:
     embed = discord.Embed(
@@ -143,9 +145,13 @@ def build_board_embed(session: GameSession) -> discord.Embed:
         deck_line = ""
         if player.deck_name:
             deck_line = f"🃏 [{player.deck_name}]({player.deck_url})"
+            if player.bracket:
+                deck_line += f" — {player.bracket}"
+            if player.deck_cost:
+                deck_line += f" — {player.deck_cost}"
         elif player.commander_name:
             deck_line = f"🃏 {player.commander_name}"
-
+ 
         value_parts = [life_line]
         if poison_line:
             value_parts.append(poison_line)
@@ -316,10 +322,12 @@ class CmdDamageView(discord.ui.View):
 
 # ─── Archidekt Helper ───────────────────────────────────────────────────────────
 
+# ─── Archidekt Helper ───────────────────────────────────────────────────────────
+ 
 async def fetch_archidekt_deck(url: str) -> dict | None:
     """
     Fetch deck info from the Archidekt public API.
-    Returns dict with 'name', 'commander', 'url' or None on failure.
+    Returns dict with name, commander, bracket, cost, url — or None on failure.
     """
     try:
         # Extract deck ID from URL formats:
@@ -330,37 +338,56 @@ async def fetch_archidekt_deck(url: str) -> dict | None:
             if part == "decks" and i + 1 < len(parts):
                 deck_id = parts[i + 1]
                 break
-
+ 
         if not deck_id or not deck_id.isdigit():
             return None
-
-        api_url = f"https://api.archidekt.com/api/decks/{deck_id}/small/"
+ 
+        api_url = f"https://archidekt.com/api/decks/{deck_id}/"
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+            async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status != 200:
+                    print(f"[Archidekt] HTTP {resp.status} for deck {deck_id}")
                     return None
                 data = await resp.json()
-
+ 
+        # ── Basic info ──────────────────────────────────────────────────────────
         name = data.get("name", "Unknown Deck")
-
-        # Find commander(s)
-        commanders = []
+ 
+        # ── Bracket ─────────────────────────────────────────────────────────────
+        bracket_raw = data.get("edhBracket")
+        bracket_str = f"Bracket {bracket_raw}" if bracket_raw else None
+ 
+        # ── Commander(s) ────────────────────────────────────────────────────────
+        commanders = set()
+        total_cost = 0.0
         for card in data.get("cards", []):
-            cats = [c.get("name", "") for c in card.get("categories", [])]
+
+            # Commander detection
+            cats = card.get("categories", [])
             if "Commander" in cats:
                 card_name = card.get("card", {}).get("oracleCard", {}).get("name", "")
                 if card_name:
-                    commanders.append(card_name)
+                    commanders.add(card_name)
 
+            # Cost — TCG price × quantity per card
+            quantity = card.get("quantity", 1)
+            tcg_price = card.get("card", {}).get("prices", {}).get("tcg") or 0.0
+            total_cost += tcg_price * quantity
+
+        # These two lines must be outside the for loop (no indentation under it)
         commander_str = " & ".join(commanders) if commanders else None
-
+        cost_str = f"${total_cost:.2f}" if total_cost > 0 else None
+ 
         return {
             "name": name,
             "commander": commander_str,
+            "bracket": bracket_str,
+            "cost": cost_str,
             "url": f"https://archidekt.com/decks/{deck_id}",
         }
-
-    except Exception:
+ 
+    except Exception as e:
+        print(f"[Archidekt] Error: {e}")
         return None
 
 
@@ -439,26 +466,32 @@ async def deck(interaction: discord.Interaction, url: str):
     if not session:
         await interaction.response.send_message("No active game.", ephemeral=True)
         return
-
+ 
     player = session.get_player(interaction.user.id)
     if not player:
         await interaction.response.send_message("You're not in this game.", ephemeral=True)
         return
-
+ 
     await interaction.response.defer(ephemeral=True)
     deck_data = await fetch_archidekt_deck(url)
-
+ 
     if deck_data:
         player.deck_url = deck_data["url"]
         player.deck_name = deck_data["name"]
         player.commander_name = deck_data["commander"]
+        player.bracket = deck_data.get("bracket")
+        player.deck_cost = deck_data.get("cost")
         msg = f"✅ Deck linked: **{deck_data['name']}**"
-        if deck_data["commander"]:
+        if deck_data.get("commander"):
             msg += f"\nCommander: **{deck_data['commander']}**"
+        if deck_data.get("bracket"):
+            msg += f"\n{deck_data['bracket']}"
+        if deck_data.get("cost"):
+            msg += f"\nEstimated cost: **{deck_data['cost']}**"
     else:
         player.deck_url = url
         msg = "⚠️ Could not fetch deck details, but URL saved."
-
+ 
     await interaction.followup.send(msg, ephemeral=True)
 
 
